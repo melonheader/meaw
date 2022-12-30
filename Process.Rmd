@@ -1,0 +1,177 @@
+
+
+```{r Source libraries}
+source("./F_process.R")
+```
+
+# ------------------------------------------------------------------------------
+## Files
+
+Here the script might produce errors if the naming convention in the MEA recording has been changed.
+Be vigilant and keep the naming as follows (DIV should be in capitals):
+*_DIV21(000)_*.csv
+```{r 1. Parse raw data in the source directory }
+t.fls <- parse_file.list(".")
+```
+
+Assemble a spike list (list)
+# ------------------------------------------------------------------------------
+```{r Check metadata}
+## Here one needs to load any environmental data file
+t.meta <- parse_meta("NoBarcode_20221213_Scr_Larp_Elavl_DIV07(000)_environmental_data.csv")
+t.meta
+```
+
+Here we assemble a main data object from the files that machine spits out.
+---- bin_interval parameter can be decreased to increase the resolution (time interval over which spikes are averaged)
+default is 0.25, which is 0.25 sec.
+---- well_min_rate argument sets a minimum number of electrodes that should be firing for a well to considered actiuve.
+Normally, we use 4 electrodes per well, but in some cases the parameter can be reduced to 2.
+---- beg = 0 and end = 300 arguments allows to specify the time frame of the recording. 
+In our case, the beg is set to 0 and the end is set to 300 (seconds), which corresponds to first 5 mins of recording.
+
+```{r Set up DIVs to iterate over}
+## Here one sets up a vector of DIVs to iterate over
+divs <- c(7, 11, 14, 18, 21()
+```
+
+```{r 2. Assemble table with spikes}
+## average spikes
+l.div <- list()
+for (i in divs) {
+  ##
+  t.fls %>% 
+  filter(data_type == "spike_list", div == i) %>% 
+  as.list(.) %>% 
+  pmap(.,
+       ~ parse_mea(..1) %>%
+         filter(Treatment %in% c("Scrambled", "shLarp1", "shElavl234"))) %>% 
+    `[[`(1) -> t.spks
+
+  ## Split into a list by well and then by electrode
+  t.spks %>% 
+    split(., .$Well) %>% 
+    purrr::map(., 
+               function(welltab) split(welltab, welltab$Electrode) %>% 
+                 purrr::map(., 
+                            function(eltab) eltab %>% pull(`Time (s)`)
+                            )
+               ) -> l.wells
+  ##
+  purrr::map(l.wells,
+             ~ construct_s(.x, beg = 0, end = 300, bin_interval = 0.25)) -> l.s
+  
+  ## Filter 
+  purrr::map(l.s,
+             ~ filter_spike.list(.x, well_min_rate = 2)) -> l.div[[as.character(i)]]
+}
+
+## Drop all empty wells from the list
+purrr::map(l.div,
+           function(div) {
+             purrr::map_lgl(div,
+                            ~ length(.x) > 0)
+           }) -> l.div_keep
+purrr::map2(l.div,
+            l.div_keep,
+            ~ .x[.y]) -> l.div
+
+## Process list into a table with spike features
+purrr::map2_dfr(l.div,
+                names(l.div),
+                function(el.div, div) {
+                  purrr::map2_dfr(el.div, 
+                                  names(el.div),
+                                  ~ tibble(DIV = div,
+                                           Well = .y, 
+                                           MFR = mean(.x$meanfiringrate),
+                                           stdFR = sd(.x$meanfiringrate),
+                                           nae = .x$NCells)
+                                  )
+                }) %>% 
+  inner_join(t.meta, ., by = "Well") -> t.proc
+```
+
+## Prepare burst features
+# ------------------------------------------------------------------------------
+```{r 3. Assemble table with spike bursts}
+## read spike burst files
+t.fls %>% 
+  filter(data_type == "electrode_burst_list") %>% 
+  as.list(.) %>% 
+  pmap_dfr(.,
+           ~ parse_mea(..1) %>%
+             filter(Treatment %in% c("Scrambled", "shLarp1", "shElavl234")) %>% 
+             mutate(DIV = ..3)) -> t.brst
+
+## assemble a table with Active electrodes
+purrr::map2_dfr(l.div,
+            names(l.div),
+            function(div_l, div) {
+              purrr::map2_dfr(div_l,
+                          names(div_l),
+                          function(well_tab, well) {
+                            tibble(DIV = div,
+                                   Well = well, 
+                                   AE = well_tab$channels)
+                          })
+            }) -> t.ae_keep
+## Filter burst table by active electrodes and restrict the time frame to 5 minuts (before stimulation)
+t.brst %>% 
+  mutate(DIV = as.character(DIV)) %>% 
+  inner_join(t.ae_keep,
+             ., 
+             by = c("DIV", "Well", "AE" = "Electrode")) %>% 
+  filter(`Time (s)` <= 300) %>%   ## <-----------------------------------
+  group_by(Well, Treatment, DIV, AE) %>% 
+  summarise(n_bursts = n(),
+            brst.size_avg = mean(`Size (spikes)`),
+            brst.length_avg = mean(`Duration (s)`),
+            .groups = "drop") -> t.brst_eltd
+```
+
+## Prepare Network spikes (NS) features
+# ------------------------------------------------------------------------------
+```{r 4. Assemble table with network spikes}
+purrr::map2_dfr(l.div,
+                names(l.div),
+                function(div_l, div) {
+                  purrr::map2_dfr(div_l,
+                              names(div_l),
+                              function(well_tab, well) {
+                                n.spks <- well_tab$firing_rates$frate
+                                n.ns <- sum(n.spks >= 4)
+                                tibble(DIV = div,
+                                       Well = well, 
+                                       NAE = well_tab$NCells,
+                                       NS = n.ns)
+                              })
+                }) -> t.ns
+## add meta data
+t.ns <- t.ns %>% 
+  inner_join(t.meta, ., by = "Well") %>% 
+  mutate(DIV = factor(DIV, levels = divs))
+```
+
+
+## Write down results
+# ------------------------------------------------------------------------------
+```{r 5. Write down processed results}
+if (!dir.exists("./processed")) {
+  dir.create("./processed")
+}
+
+## list of all results
+write_rds(l.div, file = "./processed/l_assembled.RDS")
+
+## Table with well annotation
+write_tsv(t.meta, file = "./processed/t_meta.tsv")
+## Spike table
+write_tsv(t.proc, file = "./processed/t_spikes.tsv")
+## Burst table
+write_tsv(t.brst_eltd, file = "./processed/t_bursts.tsv")
+## NS table
+write_tsv(t.ns, file = "./processed/t_ns.tsv")
+```
+
+

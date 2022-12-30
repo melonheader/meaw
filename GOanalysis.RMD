@@ -1,0 +1,452 @@
+---
+title: "ythdf_GOanalysis.RMD"
+author: "ab"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+```
+
+Notebook with a code to analyse mRNA-seq of shYTHDF123 KD in PCNs. 
+
+
+```{r Source libraries}
+source("/local/artem/Projects/Stability/Revision/organised/source/header.R")
+#source("./F_prepare.R")
+#source("/home/abarano/Scripts/Utility/F_miscellaneous.R")
+options(show_col_types = F)
+```
+
+```{r Prepare results directories}
+if (!dir.exists("./results")) {
+  dir.create("./results")
+}
+```
+
+
+## Inital localization of DE genes
+```{r}
+## Read gene expression
+res_phen.long <- read_rds("/local/artem/Projects/Stability/Results/PCN.TwoWay_shElavl234//DEres.2c_Phen.Long.RDS") %>% 
+  inner_join(mm10Ann, ., by = c("gene_id" = "gene_name")) %>% 
+  mutate(comp_1 = str_split_fixed(comp, "_", 2)[, 1],
+         comp = "shElavl234.vs.Scrambled")
+#
+res_comp.wide <- read_rds("/local/artem/Projects/Stability/Results/PCN.TwoWay_shElavl234/DEres.2c_Comp.Wide.RDS") %>% 
+  inner_join(mm10Ann, ., by = c("gene_id" = "gene_name"))
+res_comp.long <- read_rds("/local/artem/Projects/Stability/Results/PCN.TwoWay_shElavl234/DEres.2c_Comp.Long.RDS") %>% 
+  inner_join(mm10Ann, ., by = c("gene_id" = "gene_name")) %>% 
+  mutate(comp_1 = str_split_fixed(comp, "_", 3)[, 3],
+         comp = "Neurite.vs.Soma")
+
+## filter by lfcSE, keep it below 90th percentile
+res_comp.wide <- res_comp.wide %>% 
+  filter(lfcSE_shElavl234 <= quantile(lfcSE_shElavl234, 0.9),
+         lfcSE_Scrambled <= quantile(lfcSE_Scrambled, 0.9))
+
+elavl.dn <- read_gmt("/local/artem/Projects/Stability/Results/PCN.TwoWay_shElavl234/shElavl234.vs.Scrambled_N&S_lg2fc0.58.gmt")$Scrambled
+```
+
+```{r}
+res_comp.long %>% 
+  filter(gene_name %in% elavl.dn) %>% 
+  ggplot(data = ., aes(x = log2FoldChange, y = comp_1)) + 
+  geom_boxplot(fill = alpha("red", 0.8), outlier.size = 0.5, outlier.alpha = 0.25) +
+  geom_vline(xintercept = 0) +
+  scale_x_continuous(breaks = seq(-6, 6, by = 1)) +
+  theme(aspect.ratio = 0.25) + 
+  labs(x = "lg2FC Neurite vs Soma", y = "Condition", fill = "Localization") -> p.elavl_initLoc
+```
+
+```{r}
+ggsave(plot = p.elavl_initLoc, 
+       filename = "results/p.elavl_initLoc.pdf", 
+       height = 4, 
+       width = 8)
+```
+
+```{r}
+res_comp.long %>% 
+  filter(gene_name %in% elavl.dn) %>% 
+  tabyl(sign, comp_1)
+```
+```{r}
+res_comp.long %>% 
+  filter(gene_name %in% elavl.dn) %>% 
+  ggplot(data = ., aes(y = comp_1)) + 
+  geom_bar(aes(fill = sign), size = 0.25, color = "black") + 
+  scale_fill_manual(values = alpha(pal_loc.2way, 0.67)) +
+  theme(aspect.ratio = 0.25) + 
+  labs(x = "Transcripts downregulated in shElavl234", y = "Condition", fill = "Localization") -> p.elavl_locCats
+```
+```{r}
+ggsave(plot = p.elavl_locCats, 
+       filename = "results/p.elavl_locCats.pdf", 
+       height = 4, 
+       width = 8)
+```
+
+```{r}
+go <- read_tsv("/local/artem/Projects/Stability/Revision/organised/figures/sf3/p_SF3.shElavl_GOterms.clpsd.tsv")
+go.genes <- read_tsv("/local/artem/Projects/Stability/Revision/organised/figures/sf3/p_SF3.shElavl_GOterms.clpsd.Genes.tsv")
+```
+
+```{r}
+go %>% 
+  mutate(term_name = str_wrap(term_name, 42)) %>% 
+  group_by(source) %>% 
+  arrange(p_value) %>% 
+  dplyr::slice(1:10) %>% 
+  #arrange(desc(intersection_size / query_size)) %>% 
+  #filter(source != "TF") %>% 
+  ggplot(data = ., aes(x = 100 * intersection_size / query_size, y = term_name)) + 
+  geom_col(aes(fill = -log10(p_value)), size = 0.25, color = "black") + 
+  facet_grid(source ~ ., scales = "free") + 
+  scale_fill_gradientn(colors = RColorBrewer::brewer.pal(9, "Reds"), limits = c(0, 10)) + 
+  labs(x = "Intersection / query, %", y = "Term name") -> p.elavl_GOs
+  
+```
+
+```{r}
+ggsave(plot = p.elavl_GOs,
+       filename = "results/p.elavl_GOs.pdf", 
+       height = 12,
+       width = 8)
+```
+
+
+
+
+
+
+
+
+
+
+# 1. GO analysis of stable and localised transcripts
+
+## Can we recover similar GO ontologies for stable and localized genes? (similar to PCN controls of other PCN experiments)
+```{r}
+## Read gene expression
+res_phen.long <- read_rds("/local/artem/Projects/Stability/Results/PCN.TwoWay_shYthdf123/DEres.2c_Phen.Long.RDS") %>% 
+  inner_join(mm10Ann, ., by = c("gene_id" = "gene_name")) %>% 
+  mutate(comp_1 = str_split_fixed(comp, "_", 2)[, 1],
+         comp = "shYTHDF123.vs.Scrambled")
+#
+res_comp.wide <- read_rds("/local/artem/Projects/Stability/Results/PCN.TwoWay_shYthdf123/DEres.2c_Comp.Wide.RDS") %>% 
+  inner_join(mm10Ann, ., by = c("gene_id" = "gene_name"))
+res_comp.long <- read_rds("/local/artem/Projects/Stability/Results/PCN.TwoWay_shYthdf123/DEres.2c_Comp.Long.RDS") %>% 
+  inner_join(mm10Ann, ., by = c("gene_id" = "gene_name")) %>% 
+  mutate(comp_1 = str_split_fixed(comp, "_", 3)[, 3],
+         comp = "Neurite.vs.Soma")
+
+## filter by lfcSE, keep it below 90th percentile
+res_comp.wide <- res_comp.wide %>% 
+  filter(lfcSE_shYTHDF123 <= quantile(res_comp.wide$lfcSE_shYTHDF123, 0.8),
+         lfcSE_Scrambled <= quantile(res_comp.wide$lfcSE_Scrambled, 0.8))
+```
+
+## Up-regulated genes
+```{r}
+res_phen.long %>% 
+  filter(sign == "shYTHDF123") %>% 
+  split(., .$comp_1) %>% 
+  purrr::map(., ~ .x %>% pull(gene_name)) %>% 
+  purrr::reduce(., intersect) -> v.upreg
+```
+
+
+```{r}
+l.hl$PCN.dnCAF1 %>% 
+  filter(group == "GFP") %>% 
+  mutate(gene_id = str_split_fixed(gene, "_", 2)[, 1],
+         gene_name = str_split_fixed(gene, "_", 2)[, 2],
+         hl_perc = fact_percentile(Half_life, seq_by = 0.1, report_splits = T, fact = T)) %>% 
+  dplyr::select(contains("gene_"), Half_life, hl_perc) %>% 
+  inner_join(., res_comp.wide[, c("gene_id", "sign_Scrambled")], by = "gene_id") -> t.arb1
+```
+
+## quickly show preferred neuritic localisation of stable transcripts - this hold true
+```{r}
+t.arb1 %>% 
+  tabyl(hl_perc, sign_Scrambled) %>% 
+  as_tibble() %>% 
+  pivot_longer(., c(NS, Neurite, Soma), names_to = "loc", values_to = "n") %>% 
+  mutate(loc = factor(loc, levels = c("Neurite", "NS", "Soma"))) %>% 
+  ggplot(data = ., aes(x = n, y = hl_perc)) + 
+  geom_col(aes(fill = loc), position = "fill") + 
+  scale_fill_manual(values = alpha(pal_loc.2way, 0.67))
+```
+Take top 30% most stable and Neurite localised 
+```{r}
+t.arb1 %>% 
+  filter(str_detect(hl_perc, "100%"),
+         sign_Scrambled == "Neurite") %>% 
+  pull(gene_name) -> v.st.loc
+```
+
+## Maybe GO? since it was so nice
+```{r}
+library(gprofiler2)
+gost(v.st.loc, organism = "mmusculus", ordered_query = F, significant = T, evcodes = T) -> gostres
+```
+## Collapse terms that are of lower level
+```{r}
+gostres$result %>% 
+  dplyr::select(-evidence_codes) %>% 
+  split(., .$query) %>% 
+  purrr::map_dfr(., 
+                 function(gores) {
+                   gores %>%
+                     #dplyr::select() %>% 
+                     filter(str_detect(source, "GO|KEGG"), 
+                            term_size < 500,
+                            !str_detect(term_name, "Corona|Hippo")) %>% 
+                     arrange(term_size) -> gores.filt
+                   purrr::map_dfr(gores.filt$term_id,
+                                  function(term) {
+                                    gores.filt %>% filter(term_id == term) -> gores.term
+                                    gores.term %>% pull(parents) %>% unlist() -> v.pars
+                                    ## break and return if the parent of the starting term is not present
+                                    if (!any(v.pars %in% gores.filt$term_id)) {
+                                        return(
+                                          gores.term %>% 
+                                            mutate(parents = paste0(unlist(parents), collapse = ","))
+                                        )
+                                      }
+                                    v.chlds <- gores.term$term_id
+                                    ## look along parents until there are no more detected terms
+                                    while (length(v.pars) > 0) {
+                                      v.pars.out <- v.pars
+                                      gores.filt %>% filter(term_id %in% v.pars) %>% pull(parents) %>% unlist() -> v.pars
+                                      if (!any(v.pars %in% gores.filt$term_id)) {
+                                        break
+                                      }
+                                      v.chlds <- c(v.chlds, v.pars)
+                                    }
+                                    ## remove the last element of the child vector since it the term we want to keep
+                                    v.chlds <- v.chlds[!(v.chlds %in% v.pars.out)] ## not used after all
+                                    ## update the table
+                                    gores.filt %>% 
+                                      filter(term_id %in% v.pars.out) %>% 
+                                      mutate(parents = paste0(unlist(parents), collapse = ","))
+                                  }
+                                  ) %>% distinct(term_id, .keep_all = T)
+                 } 
+                 ) -> t.gostres_clpsd
+```
+
+## Expand gene names for each term
+```{r}
+goa_mouse <- read_tsv("/local/artem/Data/Annotations/goa_mouse.gpi", skip = 22, col_names = F, show_col_types = F)
+goa_mouse <- goa_mouse %>% dplyr::select(gene_name = X3, info = X4)
+
+terms <- unique(t.gostres_clpsd$term_id)
+terms.names <- t.gostres_clpsd[which(terms %in% t.gostres_clpsd$term_id), ]$term_name
+purrr::map2_dfr(terms, terms.names,
+                function(term, name) {
+                  t.gostres_clpsd %>% filter(term_id == term) %>% dplyr::slice(1) %>% pull(intersection) %>% 
+                    str_split_fixed(., ",", Inf) %>% 
+                    as.character() -> term.genes
+                  goa_mouse %>% filter(gene_name %in% term.genes) %>% 
+                    mutate(GO.term_id = term,
+                           GO.term_name = name) %>% 
+                    dplyr::select(contains("GO"), everything())
+                }) -> t.gostres_genes
+```
+
+```{r}
+write_tsv(t.gostres_genes, "./results/shYthdf123_stableNloc_GOsGenes.tsv")
+```
+
+```{r, fig.height=8}
+t.gostres_clpsd %>% 
+  mutate(term_name = str_wrap(term_name, 42)) %>% 
+  group_by(source) %>% 
+  arrange(p_value) %>% 
+  dplyr::slice(1:5) %>% 
+  #arrange(desc(intersection_size / query_size)) %>% 
+  #filter(source != "TF") %>% 
+  ggplot(data = ., aes(x = 100 * intersection_size / query_size, y = term_name)) + 
+  geom_col(aes(fill = -log10(p_value)), size = 0.25, color = "black") + 
+  facet_grid(source ~ ., scales = "free") + 
+  scale_fill_gradientn(colors = RColorBrewer::brewer.pal(9, "Reds"), limits = c(0, 20)) + 
+  labs(x = "Intersection / query, %", y = "Term name")
+```
+
+## What about response genes?
+```{r}
+l.arg <- purrr::map(1:3, 
+                    ~ read_xlsx("../../Revision/ARG_analysis/ST5_ARGs.xlsx", 
+                                sheet = .x) %>%
+                      pull(`Gene ID`) %>%
+                      na.omit()
+                    )
+names(l.arg) <- c("rPRG", "dPRG", "SRG")
+```
+
+## Are they downrehulated?
+```{r}
+list(
+  res_phen.long %>% filter(gene_name %in% purrr::reduce(l.arg, c)) %>% mutate(cat = "rPRG+dPRG+SRG"),
+  res_phen.long %>% mutate(cat = "Population")
+) %>% 
+  purrr::reduce(., rbind) %>% 
+  ggplot(data = ., aes(x = comp_1, y = log2FoldChange)) + 
+  geom_boxplot(aes(fill = cat), outlier.shape = NA, size = 0.25) + 
+  geom_hline(yintercept = 0) +
+  scale_fill_manual(values = alpha(c(Population = "grey50", 
+                                     `rPRG+dPRG+SRG` = "orange"),
+                                   0.67)) +
+  coord_cartesian(ylim = c(-3, 2.5)) +
+  labs(x = "Compartment", y = "lg2FC shYthdf123 vs Scrambled", fill = "Gene group") +
+  theme(aspect.ratio = 2) -> p.yth.rgs_kdlg2fc_boxes
+```
+```{r fig.width=3.5, fig.height=3.5}
+ggsave(plot = p.yth.rgs_kdlg2fc_boxes, 
+       filename = paste0("./results/", prfx, "RGs.kdlg2fc_boxes.pdf"),
+       width = 3.5, height = 3.5)
+```
+
+
+
+And now delta-localisation
+```{r}
+list(
+  res_comp.wide %>% filter(gene_name %in% purrr::reduce(l.arg, c)) %>% mutate(cat = "rPRG+dPRG+SRG"),
+  res_comp.wide %>% filter(gene_name %in% v.upreg) %>% mutate(cat = "shYthdf123 Up-regulated"),
+  res_comp.wide %>% mutate(cat = "Population")
+) %>% 
+  purrr::reduce(., rbind) %>% 
+  ggplot(data = ., aes(x = cat, y = log2FoldChange_shYTHDF123 - log2FoldChange_Scrambled)) + 
+  geom_boxplot(aes(fill = cat), outlier.shape = NA, size = 0.25) + 
+  geom_hline(yintercept = 0) +
+  scale_fill_manual(values = alpha(c(Population = "grey50", 
+                                     `rPRG+dPRG+SRG` = "orange",
+                                     `shYthdf123 Up-regulated` = pal_mut.msa[3]),
+                                   0.67)) +
+  coord_cartesian(ylim = c(-1.5, 1.25)) +
+  scale_y_continuous(breaks = seq(-3, 3, by = 0.5)) +
+  labs(x = "Compartment", y = "delta lg2FC Neurite vs Soma\nshYthdf123 - Scrambled", 
+       fill = "Gene group") +
+  theme(aspect.ratio = 2, axis.text.x = element_blank(), axis.title.x = element_blank()) -> p.yth.rgs_dloc_boxes
+```
+```{r fig.width=4.5, fig.height=3.5}
+ggsave(plot = p.yth.rgs_dloc_boxes, filename = paste0("./results/", prfx, "RGs.dloc_boxes.pdf"),
+       width = 4.5, height = 3.5)
+```
+```{r}
+p.yth.rgs_dloc_boxes$data %>% 
+  mutate(delta_loc = log2FoldChange_shYTHDF123 - log2FoldChange_Scrambled) %>% 
+  aov(data = ., formula = delta_loc ~ cat) -> aov.tst
+
+TukeyHSD(aov.tst)
+```
+
+
+
+## Initial localisation
+```{r}
+list(
+  res_comp.long %>% filter(gene_name %in% v.upreg) %>% mutate(cat = "shYthdf123 Up-regulated"),
+  res_comp.long %>% filter(gene_name %in% purrr::reduce(l.arg, c)) %>% mutate(cat = "rPRG+dPRG+SRG"),
+  res_comp.long %>% mutate(cat = "Population")
+) %>% 
+  purrr::reduce(., rbind) %>% 
+  ggplot(data = ., aes(x = comp_1, y = log2FoldChange)) + 
+  geom_boxplot(aes(fill = cat), outlier.shape = NA, size = 0.25) + 
+  geom_hline(yintercept = 0) +
+  scale_fill_manual(values = alpha(c(Population = "grey50", 
+                                     `rPRG+dPRG+SRG` = "orange",
+                                     `shYthdf123 Up-regulated` = pal_mut.msa[3]),
+                                   0.67)) +
+  coord_cartesian(ylim = c(-3, 5)) +
+  labs(x = "Phenotype", y = "lg2FC Neurite vs Soma", fill = "Gene group") +
+  theme(aspect.ratio = 2) -> p.yth.rgs_inloc_boxes
+```
+```{r fig.width=4.5, fig.height=3.5}
+ggsave(plot = p.yth.rgs_inloc_boxes, filename = paste0("./results/", prfx, "RGs.inloc_boxes.pdf"),
+       width = 4.5, height = 3.5)
+```
+
+
+
+
+## what are GOs of these buddies?
+```{r}
+library(gprofiler2)
+gost(v.upreg, organism = "mmusculus", ordered_query = F, significant = T, evcodes = T) -> gostres
+```
+## Collapse terms that are of lower level
+```{r}
+gostres$result %>% 
+  dplyr::select(-evidence_codes) %>% 
+  split(., .$query) %>% 
+  purrr::map_dfr(., 
+                 function(gores) {
+                   gores %>%
+                     #dplyr::select() %>% 
+                     filter(str_detect(source, "GO|KEGG"), 
+                            term_size < 500,
+                            !str_detect(term_name, "Corona|Hippo")) %>% 
+                     arrange(term_size) -> gores.filt
+                   purrr::map_dfr(gores.filt$term_id,
+                                  function(term) {
+                                    gores.filt %>% filter(term_id == term) -> gores.term
+                                    gores.term %>% pull(parents) %>% unlist() -> v.pars
+                                    ## break and return if the parent of the starting term is not present
+                                    if (!any(v.pars %in% gores.filt$term_id)) {
+                                        return(
+                                          gores.term %>% 
+                                            mutate(parents = paste0(unlist(parents), collapse = ","))
+                                        )
+                                      }
+                                    v.chlds <- gores.term$term_id
+                                    ## look along parents until there are no more detected terms
+                                    while (length(v.pars) > 0) {
+                                      v.pars.out <- v.pars
+                                      gores.filt %>% filter(term_id %in% v.pars) %>% pull(parents) %>% unlist() -> v.pars
+                                      if (!any(v.pars %in% gores.filt$term_id)) {
+                                        break
+                                      }
+                                      v.chlds <- c(v.chlds, v.pars)
+                                    }
+                                    ## remove the last element of the child vector since it the term we want to keep
+                                    v.chlds <- v.chlds[!(v.chlds %in% v.pars.out)] ## not used after all
+                                    ## update the table
+                                    gores.filt %>% 
+                                      filter(term_id %in% v.pars.out) %>% 
+                                      mutate(parents = paste0(unlist(parents), collapse = ","))
+                                  }
+                                  ) %>% distinct(term_id, .keep_all = T)
+                 } 
+                 ) -> t.gostres_clpsd
+```
+## Expand gene names for each term
+```{r}
+goa_mouse <- read_tsv("/local/artem/Data/Annotations/goa_mouse.gpi", skip = 22, col_names = F, show_col_types = F)
+goa_mouse <- goa_mouse %>% dplyr::select(gene_name = X3, info = X4)
+
+terms <- unique(t.gostres_clpsd$term_id)
+terms.names <- t.gostres_clpsd[which(terms %in% t.gostres_clpsd$term_id), ]$term_name
+purrr::map2_dfr(terms, terms.names,
+                function(term, name) {
+                  t.gostres_clpsd %>% filter(term_id == term) %>% dplyr::slice(1) %>% pull(intersection) %>% 
+                    str_split_fixed(., ",", Inf) %>% 
+                    as.character() -> term.genes
+                  goa_mouse %>% filter(gene_name %in% term.genes) %>% 
+                    mutate(GO.term_id = term,
+                           GO.term_name = name) %>% 
+                    dplyr::select(contains("GO"), everything())
+                }) -> t.gostres_genes
+```
+
+```{r}
+write_tsv(t.gostres_genes, "./results/shYthdf123_Up-reg_GOsGenes.tsv")
+```
+
+
+
+

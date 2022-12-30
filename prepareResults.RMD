@@ -1,0 +1,401 @@
+---
+title: "prepare_results"
+author: "ab"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Notebook with a code to generate plots for electrophysiology assay
+
+
+```{r Source libraries}
+source("./F_prepare.R")
+options(show_col_types = F)
+```
+
+```{r Prepare results dir}
+if (!dir.exists("./results")) {
+  dir.create("./results")
+}
+prfx <- ""  # can add a name to you run or just leave empty
+```
+
+First, we want to load in the data and clean it bit for the analysis
+```{r 1. Load data}
+t_spikes <- read_tsv("./processed/t_spikes.tsv", show_col_types = F)
+t_bursts <- read_tsv("./processed/t_bursts.tsv", show_col_types = F)
+t_ns <- read_tsv("./processed/t_ns.tsv", show_col_types = F)
+```
+
+
+# ------------------------------------------------------------------------------
+## 1. Spike rate analysis
+
+### Manual filtering
+```{r}
+## filter inactive wells cells in D3 and D2 die at day 21, only residual activity at day 25
+t_spikes_filt <- t_spikes %>% 
+  filter(!(Well %in% c("D3", "D2") & DIV == "25"),
+         Treatment %in% c("Scrambled", "ShYTFD"), 
+         !Well %in% c("D5"))
+
+## summarise per DIV for line plotting
+t_spikes_filt_sum <- t_spikes_filt %>%  
+  group_by(Treatment, DIV) %>% 
+  summarise(MFR_br.avg = mean(MFR, na.rm = T),
+            MFR_br.sd = sd(MFR, na.rm = T),
+            .groups = "drop") %>% 
+  mutate(DIV = as.numeric(DIV))
+```
+
+### Plotting
+```{r}
+## quickie to make outliers coloured
+update_geom_defaults("point", list(colour = NULL))
+ggplot(data = t_spikes_filt %>% 
+         mutate(DIV = factor(DIV, levels = c(7, 11, 14, 18, 21))), 
+       aes(x = DIV, y = MFR)) + 
+  geom_boxplot(aes(fill = Treatment), size = 0.25, outlier.shape = 21) + 
+  #scale_fill_manual(values = alpha(pal_mut.msa[c(1,3)], 0.67)) + 
+  theme(aspect.ratio = 1.25) + 
+  labs(y = "MFR (Hz / nAE)") -> p.mfr_boxes
+## revert to default options for durther plotting
+update_geom_defaults("point", list(colour = "black"))
+```
+
+```{r}
+ggplot(data = t.t_spikes_filt_sum, 
+         aes(x = DIV, y = MFR_br.avg, color = Treatment)) + 
+    geom_point(aes(shape = Treatment), 
+               size = 2.5, 
+               position = position_dodge(width = 0.35)) + 
+    geom_errorbar(aes(ymax = MFR_br.avg + MFR_br.sd,
+                      ymin = MFR_br.avg - MFR_br.sd),
+                  size = 0.5,
+                  width = 0.25,
+                  position = position_dodge(width = 0.35)) + 
+  geom_line(position = position_dodge(width = 0.35), size = 1) + 
+  #geom_hline(yintercept = 0) +
+  scale_color_manual(values = alpha(pal_mut.msa[c(1,3)], 0.67)) + 
+  scale_x_continuous(breaks = seq(0, 25, by = 1)) +
+  theme(aspect.ratio = 0.5 ,
+        legend.position = c(0.2, 0.75)) + 
+  coord_cartesian(ylim = c(0, 50)) +
+  labs(y = "MFR, HZ / nAE", x = "DIV") -> p.mfr_lines
+```
+
+```{r fig.width=4.5, fig.height=3}
+ggsave(plot = p.mfr_lines, filename = paste0("./results/", prfx, "MFR.lines.pdf"),
+       width = 4.5, height = 3)
+```
+
+
+### Permutation test ----
+To test unambigously test for the differences between case/control we perform a MWU-test 5000 times
+on the same data with randomly permuted labels
+```{r}
+t_spikes_filt %>%
+  filter(DIV %in% c("14", "18", "21", "25")) %>% 
+  wilcox.test(formula = MFR ~ Treatment, data = .) -> spks.test_mwu
+
+t_spikes_filt %>%
+  filter(DIV %in% c("14", "18", "21", "25")) %>% 
+  perm_test(tab = ., col_to_perm = "Treatment", col_to_test = "MFR", n_perm = 5000) -> t.perm
+
+t.perm <- t.perm %>% 
+  mutate(m.lg10_pval = -log10(p.value))
+
+# ggplot(data = t.perm, 
+#        aes(x = m.lg10_pval, y = ..density..)) + 
+#   geom_histogram(bins = 50, fill = NA, size = 0.5, color = "black") + 
+#   geom_density(color = "red")
+diff(ecdf(t.perm$m.lg10_pval)(c(-log10(spks.test_mwu$p.value), Inf)))
+```
+
+## Summary of activity on a plate
+```{r}
+t_spikes_filt %>% 
+  #mutate(DIV = as.character(DIV)) %>% 
+  mutate(DIV = factor(DIV, levels = c(7, 11, 14, 18, 21, 25))) %>% 
+  group_by(Treatment, DIV) %>% 
+  summarise(n_wells = n(),
+            n_ae = sum(nae),
+            .groups = "drop") -> t.yth_summary
+write_tsv(t_spikes_filt_summary, paste0("./results/", prfx, "nAE.summary.tsv"))
+```
+
+
+
+
+
+# ------------------------------------------------------------------------------
+## 2. Burst rate analysis
+### Manual filtering (same as before)
+```{r}
+t_bursts_filt <- t_bursts %>% 
+  filter(!(Well %in% c("D3", "D2") & DIV == "25"),
+         Treatment %in% c("Scrambled", "ShYTFD"), 
+         !Well %in% c("D5")) %>% 
+  mutate(DIV = factor(DIV, levels = c(7, 11, 14, 18, 21, 25)))
+```
+```{r}
+## quickie to make outliers coloured
+update_geom_defaults("point", list(colour = NULL))
+ggplot(data = t_bursts_filt, 
+       aes(x = DIV, y = brst.size_avg)) + 
+  geom_boxplot(aes(fill = Treatment), outlier.shape = 21) + 
+  scale_fill_manual(values = alpha(pal_mut.msa[c(1,3)], 0.67)) + 
+  scale_y_log10() +
+  theme(aspect.ratio = 1.5) + 
+  labs(y = "Mean burst size, spikes") -> p.burstsize
+
+## revert to default options for durther plotting
+update_geom_defaults("point", list(colour = "black"))
+```
+
+```{r fig.width=3.5, fig.height=3}
+ggsave(plot = p.burstsize, 
+       filename = paste0("./results/", prfx, "MBS.boxes.pdf"),
+       width = 3.5, height = 3)
+```
+
+### Permutation test ----
+To test for the differences between case/control we perform a MWU-test 5000 times
+on the same data with randomly permuted labels
+```{r}
+t_bursts_filt %>%
+  filter(DIV %in% c("14", "18", "21", "25")) %>% 
+  wilcox.test(formula = brst.size_avg ~ Treatment, data = .) -> brsts.test_mwu
+
+t_bursts_filt %>%
+  filter(DIV %in% c("14", "18", "21", "25")) %>% 
+  perm_test(tab = ., col_to_perm = "Treatment", col_to_test = "brst.size_avg", n_perm = 5000) -> t.perm_brsts
+
+t.perm_brsts <- t.perm_brsts %>% 
+  mutate(m.lg10_pval = -log10(p.value))
+
+# ggplot(data = t.perm, 
+#        aes(x = m.lg10_pval, y = ..density..)) + 
+#   geom_histogram(bins = 50, fill = NA, size = 0.5, color = "black") + 
+#   geom_density(color = "red")
+diff(ecdf(t.perm$m.lg10_pval)(c(-log10(brsts.test_mwu$p.value), Inf))) # <----- here we differentiate the p.dist and get the p-value for perm.test
+```
+
+
+# ------------------------------------------------------------------------------
+## 3. Snap shot of bursting from selected region
+
+### Read in the firing data
+```{r}
+l.div <- read_rds("./processed/l_assembled.RDS")
+
+## I will look specifically at DIV18 as it has the largest differences in spike features
+div18 <- l.div$`18`
+## Only keep wells that are relevant to the analysis
+div18 <- div18[t.yth[t.yth$DIV == "18", ]$Well]
+
+purrr::map2_dfr(div18_mhz,
+            names(div18_mhz),
+            function(fr_list, well) {
+              fr_list$firing_rates$frate %>% 
+                as_tibble(., rownames = "bin") %>% 
+                pivot_longer(., !contains("bin"), names_to = "Electrode", values_to = "spikes") %>% 
+                mutate(Well = well) %>% 
+                dplyr::select(Well, Electrode, bin, spikes)
+            }) %>% 
+  inner_join(t.meta, ., by = "Well") -> t.raster_mhz
+```
+
+```{r}
+ggplot(data = t.raster_mhz %>% 
+         mutate(bin = factor(bin, levels = 0:9999),
+                Electrode = paste0(Well, "_", Electrode)), 
+       aes(y = Electrode, x = bin)) + 
+  geom_raster(aes(fill = spikes)) +
+  #geom_vline(xintercept = c(200, 280)) +
+  facet_grid(Treatment + Well ~ ., scales = "free") + 
+  # facet_grid(Treatment + Well ~ ., 
+  #            scales = "free_y", 
+  #            nrow = 2, 
+  #            strip.position = "left", 
+  #            labeller = as_labeller(c(Scrambled = "Scrambled\nElectrodes 1 -> 51", 
+  #                                     ShYTFD = "shYthdf123\nElectrodes 1 -> 43")))  +
+  scale_fill_gradient2(low = "white", high = "black") + 
+  scale_x_discrete(breaks = seq(0, 10000, by = 1000), labels = seq(0, 100, by = 10)) +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        panel.border = element_rect(size = 0.25, fill = NA)) +
+  labs(y = NULL, x = "Recording time, s") +
+  theme(strip.background = element_blank(),
+        strip.placement = "outside",
+        legend.position = "none") -> p.raster_zoomed
+```
+```{r fig.width=8, fig.height=6}
+ggsave(plot = p.raster_zoomed, 
+       filename = paste0("./results/", prfx, "Raster.zoomed.pdf"),
+       width = 8, height = 6)
+```
+
+
+### Zoom in to individual electrodes
+Pick representative electrodes for final plottings
+Extremes are D1 and C1, so we pick D2 and B4
+```{r, fig.height=2, fig.width=5}
+t.raster_mhz_sniped <- t.raster_mhz %>% 
+  filter(Well %in% c("D2", "B4")) %>% 
+  mutate(bin = factor(bin, levels = 0:9999))
+
+
+ggplot(data = t.raster_mhz_sniped, 
+       aes(y = Electrode, x = bin)) + 
+  geom_raster(aes(fill = spikes), interpolate = F) +
+  #geom_vline(xintercept = c(200, 280)) +
+  #facet_grid(Treatment + Well ~ ., scales = "free") + 
+  facet_wrap(Treatment ~ .,
+             scales = "free_y",
+             nrow = 2,
+             strip.position = "left",
+             labeller = as_labeller(c(Scrambled = "Scrambled\nElectrodes",
+                                      ShYTFD = "shYthdf123\nElectrodes")))  +
+  scale_fill_gradient2(low = "white", high = "black") + 
+  scale_x_discrete(breaks = seq(0, 10000, by = 1000), 
+                   labels = seq(0, 100, by = 10)) +
+  coord_cartesian(xlim = c(0, 9000)) +
+  theme(axis.text.y = element_blank(),
+        #axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        panel.border = element_rect(size = 0.25, fill = NA)) +
+  labs(y = NULL, x = "Recording time, s") +
+  theme(strip.background = element_blank(),
+        strip.placement = "outside",
+        legend.position = "none",
+        aspect.ratio = 0.125) -> p.raster_toshow
+```
+```{r fig.width=6, fig.height=2.5}
+ggsave(plot = p.raster_toshow, 
+       filename = paste0("./results/", prfx, "Raster.toshow.pdf"),
+       width = 6, height = 2.5)
+```
+
+## Some bursting and NS statistics
+```{r}
+t_bursts %>% 
+  filter(Well %in% c("D2", "B4"),
+         DIV == "18") %>% 
+  group_by(Treatment, Well, DIV) %>% 
+  summarise(total.bursts = sum(n_bursts),
+            avg.brst_length = mean(brst.size_avg),
+            nAE = n(), .groups = "drop") %>% 
+  mutate(Bursts.p.eltd = total.bursts / nAE)
+```
+```{r}
+t.ns %>% 
+  filter(Well %in% c("D2", "B4"),
+         DIV == "18")
+```
+
+
+
+
+```{r, fig.height=2, fig.width=5}
+t.raster_mhz_xtremes <- t.raster_mhz %>% 
+  filter(Well %in% c("D1", "C1")) %>% 
+  mutate(bin = factor(bin, levels = 0:9999))
+
+ggplot(data = t.raster_mhz_xtremes, 
+       aes(y = Electrode, x = bin)) + 
+  geom_raster(aes(fill = spikes), interpolate = F) +
+  #geom_vline(xintercept = c(200, 280)) +
+  #facet_grid(Treatment + Well ~ ., scales = "free") + 
+  facet_wrap(Treatment ~ .,
+             scales = "free_y",
+             nrow = 2,
+             strip.position = "left",
+             labeller = as_labeller(c(Scrambled = "Scrambled\nElectrodes",
+                                      ShYTFD = "shYthdf123\nElectrodes")))  +
+  scale_fill_gradient2(low = "white", high = "black") + 
+  scale_x_discrete(breaks = seq(0, 10000, by = 1000), 
+                   labels = seq(0, 100, by = 10)) +
+  coord_cartesian(xlim = c(0, 8000)) +
+  theme(axis.text.y = element_blank(),
+        #axis.ticks.y = element_blank(), 
+        axis.line.y = element_blank(),
+        panel.border = element_rect(size = 0.25, fill = NA)) +
+  labs(y = NULL, x = "Recording time, s") +
+  theme(strip.background = element_blank(),
+        strip.placement = "outside",
+        legend.position = "none",
+        aspect.ratio = 0.125) -> p.raster_extrms
+```
+```{r fig.width=6, fig.height=2.5}
+ggsave(plot = p.raster_extrms, 
+       filename = paste0("./results/", prfx, "Raster.extrms.pdf"),
+       width = 6, height = 2.5)
+```
+
+## Some bursting and NS statistics
+```{r}
+t_bursts %>% 
+  filter(Well %in% c("D1", "C1"),
+         DIV == "18") %>% 
+  group_by(Treatment, Well, DIV) %>% 
+  summarise(total.bursts = sum(n_bursts),
+            avg.brst_length = mean(brst.size_avg),
+            nAE = n(), .groups = "drop") %>% 
+  mutate(Bursts.p.eltd = total.bursts / nAE)
+```
+```{r}
+t.ns %>% 
+  filter(Well %in% c("D1", "C1"),
+         DIV == "18")
+```
+
+
+# ------------------------------------------------------------------------------
+## 4. Network spikes analysis
+
+### Manual filtering (same as before)
+```{r}
+t.yth_ns <- t_ns %>% 
+  filter(!(Well %in% c("D3", "D2") & DIV == "25"),
+         Treatment %in% c("Scrambled", "ShYTFD"), 
+         !Well %in% c("D5")) %>% 
+  mutate(TP = ifelse(DIV %in% c("7", "11", "14"), "DIV <= 14", "DIV >= 18"))
+
+## summarise per DIV for line plotting
+t.yth_ns_sum <- t.yth_ns %>%  
+  group_by(Treatment, DIV) %>% 
+  summarise(NS_br.avg = mean(NS, na.rm = T),
+            NS_br.sd = sd(NS, na.rm = T),
+            .groups = "drop") %>% 
+  mutate(DIV = as.numeric(DIV))
+```
+
+```{r}
+ggplot(data = t.yth_ns_sum, 
+         aes(x = DIV, y = NS_br.avg, color = Treatment)) + 
+    geom_point(aes(shape = Treatment), 
+               size = 3, 
+               position = position_dodge(width = 0.35)) + 
+    geom_errorbar(aes(ymax = NS_br.avg + NS_br.sd,
+                      ymin = NS_br.avg - NS_br.sd),
+                  width = 0.25,
+                  position = position_dodge(width = 0.35)) + 
+  geom_line(position = position_dodge(width = 0.35)) + 
+  #geom_hline(yintercept = 0) +
+  scale_color_manual(values = alpha(pal_mut.msa[c(1,3)], 0.67)) + 
+  scale_x_continuous(breaks = seq(0, 25, by = 1)) +
+  theme(aspect.ratio = 0.5 ,
+        legend.position = c(0.2, 0.75)) + 
+  #scale_y_log10() +
+  #coord_cartesian(ylim = c(0, 1600)) +
+  labs(y = "Count of Network Spikes", x = "DIV")
+```
+```{r}
+t.yth_ns %>% 
+  mutate(DIV = factor(DIV, levels = c(7, 11, 14, 18, 21, 25))) %>% 
+  ggplot(data = ., aes(x = DIV, y = NS)) + 
+  geom_boxplot(aes(fill = Treatment)) + 
+  scale_y_log10()
+```
