@@ -64,7 +64,7 @@ update_geom_defaults("point", list(colour = "black"))
 ```
 
 ```{r}
-ggplot(data = t.t_spikes_filt_sum, 
+ggplot(data = t_spikes_filt_sum, 
          aes(x = DIV, y = MFR_br.avg, color = Treatment)) + 
     geom_point(aes(shape = Treatment), 
                size = 2.5, 
