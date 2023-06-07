@@ -8,7 +8,7 @@ First, one needs to download the source to a desired path. Example usage:
  git clone https://github.com/melonheader/meaw.git
  cd meaw
  ```
-To perform the default analysis, copy all the MEA readins files in .csv format directly to the ./meaw.
+To perform the default analysis, copy all the MEA readings in .csv format directly to the ./meaw.
 Make sure to write div in capitals within the filenames of MEA readings.
 Down the way, the instuctions are written inside of the analysis notebooks. 
 1. Process.Rmd
