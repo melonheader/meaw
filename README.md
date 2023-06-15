@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.8042349.svg)](https://doi.org/10.5281/zenodo.8042349)
 # meaw
 
 Assembly of scripts to process MEA electrophysiology recordings.
